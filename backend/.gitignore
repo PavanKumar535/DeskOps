@@ -15,6 +15,7 @@ dist/
 .claude/
 .cursor/
 .devin/
+skills-lock.json
 
 # Generated Prisma Client
 /src/generated/prisma/

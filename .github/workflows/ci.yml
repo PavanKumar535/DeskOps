@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - "feature/**"
 
   pull_request:
     branches:
@@ -11,8 +12,23 @@ on:
 
 jobs:
   backend:
-    name: Backend Build
+    name: Backend Build & Test
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: deskops_user
+          POSTGRES_PASSWORD: deskops_dev_password
+          POSTGRES_DB: deskops_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     defaults:
       run:
@@ -35,7 +51,19 @@ jobs:
       - name: Generate Prisma Client
         run: npm run db:generate
         env:
-          DATABASE_URL: postgresql://user:password@localhost:5432/deskops
+          DATABASE_URL: postgresql://deskops_user:deskops_dev_password@localhost:5432/deskops_db?schema=public
+
+      - name: Apply Database Migrations
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://deskops_user:deskops_dev_password@localhost:5432/deskops_db?schema=public
+
+      - name: Run Backend & Tenant Isolation Tests
+        run: npm test
+        env:
+          DATABASE_URL: postgresql://deskops_user:deskops_dev_password@localhost:5432/deskops_db?schema=public
+          JWT_SECRET: deskops_ci_secret_key_testing_12345
+          NODE_ENV: test
 
       - name: Build backend
         run: npm run build
