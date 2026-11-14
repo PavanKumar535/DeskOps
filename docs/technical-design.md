@@ -109,12 +109,6 @@ File storage	Cloudflare R2 or AWS S3
 Containerisation	Docker and Docker Compose 
 CI/CD	GitHub Actions
 Deployment	Render
-Any proposed change to the specified technology stack must receive written mentor approval and be documented.
-The following points need to be discussed before implementation:
-1. Final approval of the role-by-action permission matrix.
-2. Permissions for Organisation Admins when managing ticket status and assignments.
-3. Whether technicians can close tickets directly.
-4. Whether residents can reopen tickets.
 5. Exact ticket reopening duration.
 6. Final confirmation of the team-specific client requirement.
 This is the initial technical design draft prepared using the DeskOps Phase 1 requirements and the supplied development guides.
