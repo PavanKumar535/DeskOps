@@ -1,0 +1,339 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  RESIDENT
+  STAFF
+  TECHNICIAN
+  ORG_ADMIN
+}
+
+enum TicketStatus {
+  NEW
+  TRIAGED
+  ASSIGNED
+  IN_PROGRESS
+  ON_HOLD
+  RESOLVED
+  CLOSED
+  REOPENED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum CommentVisibility {
+  PUBLIC
+  INTERNAL
+}
+
+enum AttachmentStatus {
+  PENDING
+  UPLOADED
+  PROCESSING
+  READY
+  FAILED
+}
+
+model Organisation {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users          User[]
+  properties     Property[]
+  units          Unit[]
+  tickets        Ticket[]
+  ticketEvents   TicketEvent[]
+  comments       Comment[]
+  attachments    Attachment[]
+  watchers       TicketWatcher[]
+  inboundEmails  InboundEmail[]
+  auditLogs      AuditLog[]
+  idempotencyKeys IdempotencyKey[]
+  clientRules    ClientRule[]
+  skills         TechnicianSkill[]
+  coverage       TechnicianPropertyCoverage[]
+}
+
+model User {
+  id             String   @id @default(uuid())
+  name           String
+  email          String
+  password       String
+  role           UserRole @default(RESIDENT)
+  organisationId String
+  unitId         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  unit         Unit?        @relation(fields: [unitId, organisationId], references: [id, organisationId])
+
+  technicianSkills    TechnicianSkill[]
+  propertyCoverage    TechnicianPropertyCoverage[]
+  createdTickets      Ticket[] @relation("TicketCreator")
+  assignedTickets     Ticket[] @relation("AssignedTechnician")
+  comments            Comment[]
+  ticketEvents        TicketEvent[]
+  watchedTickets      TicketWatcher[]
+  uploadedAttachments Attachment[]
+  auditLogs           AuditLog[]
+
+  @@unique([email, organisationId])
+  @@unique([id, organisationId])
+  @@index([organisationId, role])
+}
+
+model Property {
+  id             String   @id @default(uuid())
+  name           String
+  address        String
+  organisationId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  units        Unit[]
+  tickets      Ticket[]
+  technicianCoverage TechnicianPropertyCoverage[]
+
+  @@unique([id, organisationId])
+  @@index([organisationId])
+}
+
+model Unit {
+  id             String   @id @default(uuid())
+  unitNumber     String
+  propertyId     String
+  organisationId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  property     Property @relation(fields: [propertyId, organisationId], references: [id, organisationId])
+  residents    User[]
+  tickets      Ticket[]
+
+  @@unique([propertyId, unitNumber])
+  @@unique([id, organisationId])
+  @@index([organisationId])
+}
+
+model TechnicianSkill {
+  id             String   @id @default(uuid())
+  organisationId String
+  technicianId   String
+  skillName      String
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  technician   User @relation(fields: [technicianId, organisationId], references: [id, organisationId])
+
+  @@unique([technicianId, skillName])
+  @@index([organisationId])
+}
+
+model TechnicianPropertyCoverage {
+  id             String   @id @default(uuid())
+  organisationId String
+  technicianId   String
+  propertyId     String
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  technician   User @relation(fields: [technicianId, organisationId], references: [id, organisationId])
+  property     Property @relation(fields: [propertyId, organisationId], references: [id, organisationId])
+
+  @@unique([technicianId, propertyId])
+  @@index([organisationId])
+}
+
+model Ticket {
+  id             String         @id @default(uuid())
+  organisationId String
+  title          String
+  description    String
+  status         TicketStatus   @default(NEW)
+  priority       TicketPriority @default(MEDIUM)
+  category       String?
+  propertyId     String
+  unitId         String
+  createdById    String
+  assignedToId   String?
+  replyToken     String         @default(uuid())
+  mergedIntoId   String?
+  resolvedAt     DateTime?
+  closedAt       DateTime?
+  reopenUntil    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  property     Property @relation(fields: [propertyId, organisationId], references: [id, organisationId])
+  unit         Unit @relation(fields: [unitId, organisationId], references: [id, organisationId])
+  creator      User @relation("TicketCreator", fields: [createdById, organisationId], references: [id, organisationId])
+  assignedTo   User? @relation("AssignedTechnician", fields: [assignedToId, organisationId], references: [id, organisationId])
+
+  events      TicketEvent[]
+  comments    Comment[]
+  attachments Attachment[]
+  watchers    TicketWatcher[]
+  emails      InboundEmail[]
+
+  mergedInto Ticket?  @relation("TicketMerge", fields: [mergedIntoId, organisationId], references: [id, organisationId])
+  duplicates Ticket[] @relation("TicketMerge")
+
+  @@unique([id, organisationId])
+  @@unique([replyToken, organisationId])
+  @@index([organisationId, status, createdAt])
+  @@index([organisationId, assignedToId])
+  @@index([organisationId, propertyId])
+}
+
+model TicketEvent {
+  id             String       @id @default(uuid())
+  organisationId String
+  ticketId       String
+  actorId        String?
+  eventType      String
+  previousStatus TicketStatus?
+  newStatus      TicketStatus?
+  description    String?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  ticket       Ticket @relation(fields: [ticketId, organisationId], references: [id, organisationId])
+  actor        User? @relation(fields: [actorId, organisationId], references: [id, organisationId])
+
+  @@index([organisationId, ticketId, createdAt])
+}
+
+model Comment {
+  id             String           @id @default(uuid())
+  organisationId String
+  ticketId       String
+  authorId       String
+  message        String
+  visibility     CommentVisibility @default(PUBLIC)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  ticket       Ticket @relation(fields: [ticketId, organisationId], references: [id, organisationId])
+  author       User @relation(fields: [authorId, organisationId], references: [id, organisationId])
+
+  @@index([organisationId, ticketId, createdAt])
+}
+
+model Attachment {
+  id             String           @id @default(uuid())
+  organisationId String
+  ticketId       String
+  uploadedById   String
+  fileName       String
+  storageKey     String
+  contentType    String
+  fileSize       Int
+  status         AttachmentStatus @default(PENDING)
+  thumbnailKey   String?
+  createdAt      DateTime         @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  ticket       Ticket @relation(fields: [ticketId, organisationId], references: [id, organisationId])
+  uploadedBy   User @relation(fields: [uploadedById, organisationId], references: [id, organisationId])
+
+  @@index([organisationId, ticketId])
+}
+
+model TicketWatcher {
+  id             String   @id @default(uuid())
+  organisationId String
+  ticketId       String
+  userId         String
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  ticket       Ticket @relation(fields: [ticketId, organisationId], references: [id, organisationId])
+  user         User @relation(fields: [userId, organisationId], references: [id, organisationId])
+
+  @@unique([ticketId, userId])
+  @@index([organisationId])
+}
+
+model InboundEmail {
+  id                String   @id @default(uuid())
+  organisationId    String
+  ticketId          String?
+  providerMessageId String
+  fromEmail         String
+  subject           String
+  body              String
+  replyToken        String?
+  receivedAt        DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  ticket       Ticket? @relation(fields: [ticketId, organisationId], references: [id, organisationId])
+
+  @@unique([organisationId, providerMessageId])
+  @@index([organisationId, replyToken])
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organisationId String
+  actorId        String?
+  action         String
+  entityType     String
+  entityId       String
+  oldValues      Json?
+  newValues      Json?
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+  actor        User? @relation(fields: [actorId, organisationId], references: [id, organisationId])
+
+  @@index([organisationId, entityType, entityId])
+  @@index([organisationId, createdAt])
+}
+
+model IdempotencyKey {
+  id             String   @id @default(uuid())
+  organisationId String
+  key            String
+  response       Json?
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime?
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+
+  @@unique([organisationId, key])
+}
+
+model ClientRule {
+  id             String   @id @default(uuid())
+  organisationId String
+  ruleKey        String
+  name           String
+  description    String?
+  configuration Json?
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id])
+
+  @@unique([organisationId, ruleKey])
+}
