@@ -1,8 +1,16 @@
+
 import { Request, Response, NextFunction } from "express";
 import prisma from "../lib/prisma";
 import { sendSuccess, sendError } from "../utils/apiResponse";
+import { updateTicketStatus } from "../services/ticket.service";
+import { TicketStatus } from "../generated/prisma/enums";
 
-export async function getTickets(req: Request, res: Response, next: NextFunction) {
+// Get all tickets
+export async function getTickets(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
   try {
     const tickets = await prisma.ticket.findMany({
       where: {
@@ -30,9 +38,16 @@ export async function getTickets(req: Request, res: Response, next: NextFunction
   }
 }
 
-export async function getTicketById(req: Request, res: Response, next: NextFunction) {
+// Get ticket by ID
+export async function getTicketById(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
   try {
-    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const id = Array.isArray(req.params.id)
+      ? req.params.id[0]
+      : req.params.id;
 
     const ticket = await prisma.ticket.findFirst({
       where: {
@@ -53,6 +68,34 @@ export async function getTicketById(req: Request, res: Response, next: NextFunct
     }
 
     return sendSuccess(res, { ticket });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Update ticket status
+export async function updateTicketStatusController(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    if (!req.user) {
+      return sendError(res, "Authentication required", 401);
+    }
+
+    const ticketId = Array.isArray(req.params.id)
+      ? req.params.id[0]
+      : req.params.id;
+
+    const updatedTicket = await updateTicketStatus({
+      ticketId,
+      organisationId: req.tenantId!,
+      actorId: req.user.id,
+      newStatus: req.body.status as TicketStatus,
+    });
+
+    return sendSuccess(res, { ticket: updatedTicket });
   } catch (err) {
     next(err);
   }
