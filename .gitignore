@@ -147,3 +147,7 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Playwright generated files
+/frontend/playwright-report/
+/frontend/test-results/

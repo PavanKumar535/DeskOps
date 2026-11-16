@@ -6,6 +6,8 @@ export interface AuthenticatedUser {
   name: string;
   role: UserRole;
   organisationId: string;
+  unitId?: string | null;
+  propertyId?: string | null;
 }
 
 declare global {

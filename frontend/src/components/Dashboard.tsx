@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from "react";
 import type { User, Ticket, HealthStatus } from "../api";
 import { apiRequest } from "../api";
+import { TicketList } from "./tickets/TicketList";
+import { TicketDetail } from "./tickets/TicketDetail";
+import { CreateTicketModal } from "./tickets/CreateTicketModal";
 
 interface DashboardProps {
   user: User;
@@ -12,8 +15,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, token, health }) => 
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
-  // Cross-tenant test state
+  // Cross-tenant security test state
   const [crossTenantTestResult, setCrossTenantTestResult] = useState<{
     tested: boolean;
     success: boolean;
@@ -47,7 +52,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, token, health }) => 
     setCrossTenantTestResult(null);
 
     try {
-      // Intentionally request a dummy ID or attempt cross-tenant spoofing
+      // Intentionally request a non-existent or foreign ID to prove server-side isolation
       const res = await apiRequest("/api/v1/tickets/00000000-0000-0000-0000-000000000000", {}, token);
       if (!res.success) {
         setCrossTenantTestResult({
@@ -71,6 +76,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, token, health }) => 
     } finally {
       setTestingCrossTenant(false);
     }
+  };
+
+  const handleTicketCreated = (newTicket: Ticket) => {
+    setTickets((prev) => [newTicket, ...prev]);
+    setSelectedTicketId(newTicket.id);
   };
 
   return (
@@ -112,8 +122,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, token, health }) => 
               <span className="meta-value">{user.email}</span>
             </div>
             <div className="meta-row">
-              <span className="meta-label">User ID:</span>
-              <code className="meta-code">{user.id}</code>
+              <span className="meta-label">Role Context:</span>
+              <span className="meta-value text-capitalize">{user.role}</span>
             </div>
           </div>
         </div>
@@ -135,8 +145,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, token, health }) => 
               <span className="meta-value">{health.db ? "PostgreSQL 16 (Prisma 7)" : "Unreachable"}</span>
             </div>
             <div className="meta-row">
-              <span className="meta-label">Docker Mode:</span>
-              <span className="meta-value">Containerized</span>
+              <span className="meta-label">Active Tickets:</span>
+              <span className="meta-value">{tickets.length} Registered</span>
             </div>
           </div>
         </div>
@@ -166,69 +176,39 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, token, health }) => 
         </div>
       )}
 
-      {/* Tenant Tickets List */}
-      <div className="tickets-section">
-        <div className="section-header">
-          <div>
-            <h2>Tenant Tickets</h2>
-            <p>Maintenance requests belonging exclusively to {user.organisation.name}</p>
-          </div>
-          <button className="btn-refresh" onClick={fetchTickets} disabled={loading}>
-            {loading ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
+      {/* Main Ticket Lifecycle Area: List or Detail */}
+      {selectedTicketId ? (
+        <TicketDetail
+          ticketId={selectedTicketId}
+          user={user}
+          token={token}
+          onBack={() => {
+            setSelectedTicketId(null);
+            fetchTickets();
+          }}
+          onTicketUpdated={fetchTickets}
+        />
+      ) : (
+        <TicketList
+          tickets={tickets}
+          loading={loading}
+          error={error}
+          onRefresh={fetchTickets}
+          onSelectTicket={(id) => setSelectedTicketId(id)}
+          onCreateTicketClick={() => setShowCreateModal(true)}
+          organisationName={user.organisation.name}
+        />
+      )}
 
-        {error && <div className="alert alert-error">{error}</div>}
-
-        {loading ? (
-          <div className="loading-state">Loading tenant tickets...</div>
-        ) : tickets.length === 0 ? (
-          <div className="empty-state">
-            <p>No tickets found for this organisation.</p>
-          </div>
-        ) : (
-          <div className="tickets-table-wrapper">
-            <table className="tickets-table">
-              <thead>
-                <tr>
-                  <th>Ticket</th>
-                  <th>Property / Unit</th>
-                  <th>Priority</th>
-                  <th>Status</th>
-                  <th>Created By</th>
-                  <th>Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tickets.map((t) => (
-                  <tr key={t.id}>
-                    <td>
-                      <strong>{t.title}</strong>
-                      <div className="ticket-desc">{t.description}</div>
-                    </td>
-                    <td>
-                      <div>{t.property?.name || "N/A"}</div>
-                      <small className="unit-tag">Unit {t.unit?.unitNumber || "N/A"}</small>
-                    </td>
-                    <td>
-                      <span className={`priority-tag priority-${t.priority.toLowerCase()}`}>
-                        {t.priority}
-                      </span>
-                    </td>
-                    <td>
-                      <span className={`status-tag status-${t.status.toLowerCase()}`}>
-                        {t.status}
-                      </span>
-                    </td>
-                    <td>{t.creator?.name || "Resident"}</td>
-                    <td>{new Date(t.createdAt).toLocaleDateString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      {/* Create Ticket Modal */}
+      {showCreateModal && (
+        <CreateTicketModal
+          token={token}
+          isOpen={showCreateModal}
+          onClose={() => setShowCreateModal(false)}
+          onTicketCreated={handleTicketCreated}
+        />
+      )}
     </div>
   );
 };

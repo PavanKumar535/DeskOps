@@ -14,16 +14,60 @@ export interface User {
   };
 }
 
+export interface TicketEvent {
+  id: string;
+  ticketId: string;
+  actorId?: string | null;
+  eventType: string;
+  previousStatus?: string | null;
+  newStatus?: string | null;
+  description?: string | null;
+  createdAt: string;
+  actor?: {
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+  } | null;
+}
+
+export interface Unit {
+  id: string;
+  unitNumber: string;
+}
+
+export interface Property {
+  id: string;
+  name: string;
+  address: string;
+  units?: Unit[];
+}
+
+export interface Technician {
+  id: string;
+  name: string;
+  email: string;
+}
+
 export interface Ticket {
   id: string;
   title: string;
   description: string;
   status: string;
   priority: string;
+  category?: string | null;
+  propertyId?: string;
+  unitId?: string;
   property: { id: string; name: string; address: string };
   unit: { id: string; unitNumber: string };
   creator: { id: string; name: string; email: string; role: string };
+  assignedTo?: { id: string; name: string; email: string; role: string } | null;
+  resolvedAt?: string | null;
+  closedAt?: string | null;
+  reopenUntil?: string | null;
+  events?: TicketEvent[];
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface HealthStatus {
