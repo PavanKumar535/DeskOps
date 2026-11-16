@@ -58,12 +58,14 @@ jobs:
         env:
           DATABASE_URL: postgresql://deskops_user:deskops_dev_password@localhost:5432/deskops_db?schema=public
 
-      - name: Run Backend & Tenant Isolation Tests
+      - name: Run Backend Tests (Auth, Tenant Isolation, Ticket Lifecycle & Concurrency)
         run: npm test
         env:
           DATABASE_URL: postgresql://deskops_user:deskops_dev_password@localhost:5432/deskops_db?schema=public
           JWT_SECRET: deskops_ci_secret_key_testing_12345
           NODE_ENV: test
+          # Ticket reopening window: configurable, 7-day default pending mentor confirmation
+          TICKET_REOPEN_WINDOW_DAYS: "7"
 
       - name: Build backend
         run: npm run build
