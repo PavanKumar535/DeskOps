@@ -1,4 +1,3 @@
-
 import prisma from "../lib/prisma";
 import {
   isValidTransition,
@@ -313,23 +312,8 @@ export async function assignTicket(
   technicianId: string,
   actor: AuthenticatedUser
 ) {
-  const technician = await prisma.user.findUnique({
-    where: {
-      id_organisationId: {
-        id: technicianId,
-        organisationId,
-      },
-    },
-  });
-
-  if (!technician || technician.role !== UserRole.TECHNICIAN) {
-    throw createServiceError(
-      "Technician not found in this organisation",
-      404
-    );
-  }
-
   return prisma.$transaction(async (tx) => {
+    // Check tenant-scoped ticket existence first to avoid leaking technician details.
     const ticket = await tx.ticket.findFirst({
       where: { id: ticketId, organisationId },
     });
@@ -339,6 +323,22 @@ export async function assignTicket(
     }
 
     await assertStoreAccess(ticket, actor, organisationId);
+
+    const technician = await tx.user.findUnique({
+      where: {
+        id_organisationId: {
+          id: technicianId,
+          organisationId,
+        },
+      },
+    });
+
+    if (!technician || technician.role !== UserRole.TECHNICIAN) {
+      throw createServiceError(
+        "Technician not found in this organisation",
+        404
+      );
+    }
 
     const result = await tx.ticket.updateMany({
       where: {
@@ -496,7 +496,17 @@ export async function closeTicket(
       throw createServiceError("Ticket not found", 404);
     }
 
-    await assertStoreAccess(ticket, actor, organisationId);
+    // Unlike general ticket reads, closing across stores is an explicit
+    // authorization failure for STAFF, not a hidden 404.
+    if (actor.role === UserRole.STAFF) {
+      const storeId = await getUserStoreId(actor.id, organisationId);
+      if (!storeId || ticket.propertyId !== storeId) {
+        throw createServiceError(
+          "Store managers can only close tickets for their own store",
+          403
+        );
+      }
+    }
 
     if (!isValidTransition(ticket.status, TicketStatus.CLOSED)) {
       throw createServiceError(
