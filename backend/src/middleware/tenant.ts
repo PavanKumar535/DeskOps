@@ -12,6 +12,17 @@ export function tenantMiddleware(req: Request, res: Response, next: NextFunction
     return sendError(res, "Forbidden: Cross-tenant access attempted", 403);
   }
 
+  // Reject any malicious query parameter attempting to spoof a different tenant
+  if (req.query && req.query.organisationId && req.query.organisationId !== req.user.organisationId) {
+    return sendError(res, "Forbidden: Cross-tenant access attempted", 403);
+  }
+
+  // Reject any malicious header attempting to spoof a different tenant
+  const headerOrgId = req.headers["x-organisation-id"];
+  if (headerOrgId && headerOrgId !== req.user.organisationId) {
+    return sendError(res, "Forbidden: Cross-tenant access attempted", 403);
+  }
+
   req.tenantId = req.user.organisationId;
   next();
 }

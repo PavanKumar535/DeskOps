@@ -9,7 +9,7 @@
     "start": "node dist/server.js",
     "db:generate": "prisma generate",
     "seed": "tsx src/scripts/seed.ts",
-    "test": "vitest run"
+    "test": "vitest run --no-file-parallelism"
   },
   "keywords": [],
   "author": "",
