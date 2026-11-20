@@ -22,12 +22,9 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: CORS_ORIGIN
-        fromService:
-          type: web
-          name: deskops-frontend-staging
-          property: host
+        value: https://deskops-frontend-staging.onrender.com
 
-    # Frontend Static Site
+  # Frontend Static Site
   - type: web
     name: deskops-frontend-staging
     runtime: static
@@ -40,10 +37,7 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        fromService:
-          type: web
-          name: deskops-backend-staging
-          property: host
+        value: https://deskops-backend-staging.onrender.com
 
 # Staging PostgreSQL Database
 databases:
