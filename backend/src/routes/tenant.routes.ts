@@ -1,3 +1,4 @@
+
 import { Router } from "express";
 import prisma from "../lib/prisma";
 import { UserRole } from "../generated/prisma/enums";
@@ -20,13 +21,13 @@ import {
 
 const router = Router();
 
-// Enforce authentication and tenant isolation across all routes
+// Authentication and tenant isolation
 router.use(requireAuth, tenantMiddleware);
 
-// Organisation details
+// Organisation
 router.get("/organisation", getOrganisation);
 
-// Auxiliary tenant endpoints for UI dropdowns
+// Properties for tenant UI
 router.get("/properties", async (req, res, next) => {
   try {
     const properties = await prisma.property.findMany({
@@ -39,12 +40,14 @@ router.get("/properties", async (req, res, next) => {
       },
       orderBy: { name: "asc" },
     });
+
     return sendSuccess(res, { properties });
   } catch (err) {
     next(err);
   }
 });
 
+// Technicians for assignment
 router.get("/technicians", async (req, res, next) => {
   try {
     const technicians = await prisma.user.findMany({
@@ -55,22 +58,25 @@ router.get("/technicians", async (req, res, next) => {
       select: { id: true, name: true, email: true },
       orderBy: { name: "asc" },
     });
+
     return sendSuccess(res, { technicians });
   } catch (err) {
     next(err);
   }
 });
 
-// Ticket lifecycle endpoints
+// Ticket creation
 router.post(
   "/tickets",
   validateBody(createTicketSchema),
   ticketController.createTicketController
 );
 
+// Ticket listing and details
 router.get("/tickets", ticketController.getTickets);
 router.get("/tickets/:id", ticketController.getTicketById);
 
+// Ticket lifecycle
 router.post(
   "/tickets/:id/triage",
   validateBody(triageTicketSchema),
@@ -95,7 +101,10 @@ router.post(
   ticketController.resolveTicketController
 );
 
-router.post("/tickets/:id/close", ticketController.closeTicketController);
+router.post(
+  "/tickets/:id/close",
+  ticketController.closeTicketController
+);
 
 router.post(
   "/tickets/:id/reopen",
@@ -103,6 +112,10 @@ router.post(
   ticketController.reopenTicketController
 );
 
-router.get("/tickets/:id/events", ticketController.getTicketEventsController);
+// Ticket event timeline
+router.get(
+  "/tickets/:id/events",
+  ticketController.getTicketEventsController
+);
 
 export default router;

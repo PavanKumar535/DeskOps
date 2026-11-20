@@ -1,3 +1,4 @@
+
 import { describe, it, expect } from "vitest";
 import {
   isValidTransition,
@@ -5,7 +6,7 @@ import {
   isReopenWindowActive,
 } from "../src/lib/ticketStateMachine";
 
-describe("Ticket State Machine Unit Tests", () => {
+describe("Ticket State Machine", () => {
   it("should allow NEW to TRIAGED", () => {
     expect(isValidTransition("NEW", "TRIAGED")).toBe(true);
   });

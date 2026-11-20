@@ -26,7 +26,8 @@ export function createServiceError(
 }
 
 /**
- * Resolves the primary store (propertyId) associated with a user (e.g. Store Manager).
+ * Gets the store/property assigned to a Store Manager.
+ * STAFF users without a unit assignment are denied store access.
  */
 export async function getUserStoreId(
   userId: string,
@@ -41,28 +42,31 @@ export async function getUserStoreId(
     },
     include: {
       unit: true,
-      propertyCoverage: true,
     },
   });
 
-  if (!user) return null;
-  if (user.unit?.propertyId) return user.unit.propertyId;
-  if (user.propertyCoverage && user.propertyCoverage.length > 0) {
-    return user.propertyCoverage[0].propertyId;
-  }
-
-  // Fallback: Check if user has created tickets for a property
-  const lastTicket = await prisma.ticket.findFirst({
-    where: { createdById: userId, organisationId },
-    select: { propertyId: true },
-    orderBy: { createdAt: "desc" },
-  });
-
-  return lastTicket?.propertyId || null;
+  return user?.unit?.propertyId ?? null;
 }
 
 /**
- * Creates a new ticket within the user's organisation and records the creation event.
+ * Ensures a Store Manager can access only their own store's tickets.
+ */
+async function assertStoreAccess(
+  ticket: { propertyId: string },
+  actor: AuthenticatedUser,
+  organisationId: string
+): Promise<void> {
+  if (actor.role !== UserRole.STAFF) return;
+
+  const storeId = await getUserStoreId(actor.id, organisationId);
+
+  if (!storeId || ticket.propertyId !== storeId) {
+    throw createServiceError("Ticket not found", 404);
+  }
+}
+
+/**
+ * Creates a ticket and records its creation event.
  */
 export async function createTicket(
   organisationId: string,
@@ -70,15 +74,14 @@ export async function createTicket(
   input: CreateTicketInput
 ) {
   return prisma.$transaction(async (tx) => {
-    // Verify that the specified property belongs to the tenant
     const property = await tx.property.findFirst({
       where: { id: input.propertyId, organisationId },
     });
+
     if (!property) {
       throw createServiceError("Property not found in organisation", 404);
     }
 
-    // Verify unit belongs to property and organisation
     const unit = await tx.unit.findFirst({
       where: {
         id: input.unitId,
@@ -86,11 +89,13 @@ export async function createTicket(
         organisationId,
       },
     });
+
     if (!unit) {
       throw createServiceError("Unit not found in property", 404);
     }
 
-    const priority = (input.priority as TicketPriority) || TicketPriority.MEDIUM;
+    const priority =
+      (input.priority as TicketPriority) || TicketPriority.MEDIUM;
 
     const ticket = await tx.ticket.create({
       data: {
@@ -113,7 +118,6 @@ export async function createTicket(
       },
     });
 
-    // Record creation event
     await tx.ticketEvent.create({
       data: {
         organisationId,
@@ -130,7 +134,7 @@ export async function createTicket(
 }
 
 /**
- * Retrieves tickets scoped by organisation, respecting role-based store boundaries.
+ * Lists tickets according to organisation and user role.
  */
 export async function getTickets(
   organisationId: string,
@@ -138,19 +142,25 @@ export async function getTickets(
 ) {
   const where: any = { organisationId };
 
-  // Store Manager permission: Store managers can only see their own store's work
   if (user.role === UserRole.STAFF) {
     const storeId = await getUserStoreId(user.id, organisationId);
-    if (storeId) {
-      where.propertyId = storeId;
+
+    if (!storeId) {
+      throw createServiceError(
+        "Forbidden: Store Manager is not assigned to a store",
+        403
+      );
     }
+
+    where.propertyId = storeId;
   } else if (user.role === UserRole.RESIDENT) {
-    // Residents view their own created tickets or tickets for their assigned unit
-    const orConditions: any[] = [{ createdById: user.id }];
+    const conditions: any[] = [{ createdById: user.id }];
+
     if (user.unitId) {
-      orConditions.push({ unitId: user.unitId });
+      conditions.push({ unitId: user.unitId });
     }
-    where.OR = orConditions;
+
+    where.OR = conditions;
   }
 
   return prisma.ticket.findMany({
@@ -174,7 +184,7 @@ export async function getTickets(
 }
 
 /**
- * Retrieves a single ticket by ID, enforcing tenant boundaries and store manager permissions.
+ * Gets one ticket with its event history.
  */
 export async function getTicketById(
   ticketId: string,
@@ -213,19 +223,21 @@ export async function getTicketById(
     throw createServiceError("Ticket not found", 404);
   }
 
-  // Store Manager access restriction: only view tickets for own store
-  if (user.role === UserRole.STAFF) {
-    const storeId = await getUserStoreId(user.id, organisationId);
-    if (storeId && ticket.propertyId !== storeId) {
-      throw createServiceError("Ticket not found", 404);
-    }
+  await assertStoreAccess(ticket, user, organisationId);
+
+  if (
+    user.role === UserRole.RESIDENT &&
+    ticket.createdById !== user.id &&
+    ticket.unitId !== user.unitId
+  ) {
+    throw createServiceError("Ticket not found", 404);
   }
 
   return ticket;
 }
 
 /**
- * Triages a ticket (NEW -> TRIAGED), optionally updating priority or category.
+ * Moves a NEW ticket to TRIAGED.
  */
 export async function triageTicket(
   ticketId: string,
@@ -242,6 +254,8 @@ export async function triageTicket(
       throw createServiceError("Ticket not found", 404);
     }
 
+    await assertStoreAccess(ticket, actor, organisationId);
+
     if (!isValidTransition(ticket.status, TicketStatus.TRIAGED)) {
       throw createServiceError(
         `Cannot triage ticket in status ${ticket.status}. Must be NEW.`,
@@ -252,9 +266,11 @@ export async function triageTicket(
     const updateData: any = {
       status: TicketStatus.TRIAGED,
     };
+
     if (data?.priority) {
       updateData.priority = data.priority as TicketPriority;
     }
+
     if (data?.category) {
       updateData.category = data.category;
     }
@@ -287,8 +303,8 @@ export async function triageTicket(
 }
 
 /**
- * Assigns a ticket to a technician with concurrency protection.
- * Exactly 1 of 20 parallel requests will succeed; the other 19 will receive 409 Conflict.
+ * Assigns a ticket to a technician.
+ * The conditional update prevents duplicate assignments.
  */
 export async function assignTicket(
   ticketId: string,
@@ -296,27 +312,35 @@ export async function assignTicket(
   technicianId: string,
   actor: AuthenticatedUser
 ) {
-  // Validate technician belongs to the same organisation
-  const technician = await prisma.user.findUnique({
-    where: {
-      id_organisationId: {
-        id: technicianId,
-        organisationId,
-      },
-    },
-  });
-
-  if (!technician) {
-    throw createServiceError(
-      "Technician not found in this organisation",
-      404
-    );
-  }
-
   return prisma.$transaction(async (tx) => {
-    // Atomic conditional update ensuring concurrency safety:
-    // Only updates if ticket is in TRIAGED state and unassigned.
-    const updateResult = await tx.ticket.updateMany({
+    // Check tenant-scoped ticket existence first to avoid leaking technician details.
+    const ticket = await tx.ticket.findFirst({
+      where: { id: ticketId, organisationId },
+    });
+
+    if (!ticket) {
+      throw createServiceError("Ticket not found", 404);
+    }
+
+    await assertStoreAccess(ticket, actor, organisationId);
+
+    const technician = await tx.user.findUnique({
+      where: {
+        id_organisationId: {
+          id: technicianId,
+          organisationId,
+        },
+      },
+    });
+
+    if (!technician || technician.role !== UserRole.TECHNICIAN) {
+      throw createServiceError(
+        "Technician not found in this organisation",
+        404
+      );
+    }
+
+    const result = await tx.ticket.updateMany({
       where: {
         id: ticketId,
         organisationId,
@@ -329,8 +353,7 @@ export async function assignTicket(
       },
     });
 
-    if (updateResult.count === 0) {
-      // Find reason for failure to provide accurate status code
+    if (result.count === 0) {
       const current = await tx.ticket.findFirst({
         where: { id: ticketId, organisationId },
       });
@@ -339,7 +362,10 @@ export async function assignTicket(
         throw createServiceError("Ticket not found", 404);
       }
 
-      if (current.assignedToId !== null || current.status === TicketStatus.ASSIGNED) {
+      if (
+        current.assignedToId !== null ||
+        current.status === TicketStatus.ASSIGNED
+      ) {
         throw createServiceError(
           "Ticket has already been assigned to another technician",
           409
@@ -352,7 +378,6 @@ export async function assignTicket(
       );
     }
 
-    // Record assignment event
     await tx.ticketEvent.create({
       data: {
         organisationId,
@@ -378,7 +403,7 @@ export async function assignTicket(
 }
 
 /**
- * Resolves an IN_PROGRESS ticket and sets the reopening deadline.
+ * Resolves an IN_PROGRESS ticket and sets its reopening deadline.
  */
 export async function resolveTicket(
   ticketId: string,
@@ -395,6 +420,8 @@ export async function resolveTicket(
       throw createServiceError("Ticket not found", 404);
     }
 
+    await assertStoreAccess(ticket, actor, organisationId);
+
     if (!isValidTransition(ticket.status, TicketStatus.RESOLVED)) {
       throw createServiceError(
         `Cannot resolve ticket in status ${ticket.status}. Must be IN_PROGRESS.`,
@@ -403,7 +430,9 @@ export async function resolveTicket(
     }
 
     const now = new Date();
-    const reopenUntil = new Date(now.getTime() + getReopenWindowDurationMs());
+    const reopenUntil = new Date(
+      now.getTime() + getReopenWindowDurationMs()
+    );
 
     const updated = await tx.ticket.update({
       where: { id_organisationId: { id: ticketId, organisationId } },
@@ -440,15 +469,14 @@ export async function resolveTicket(
 
 /**
  * Closes a RESOLVED ticket.
- * Enforces role permission: Store Manager (STAFF) can close only for own store;
- * Head Office (ORG_ADMIN) can close tickets for any store.
+ * STAFF can close only their own store's tickets.
+ * ORG_ADMIN can close tickets across the organisation.
  */
 export async function closeTicket(
   ticketId: string,
   organisationId: string,
   actor: AuthenticatedUser
 ) {
-  // Check permission: Residents and technicians cannot close tickets
   if (
     actor.role !== UserRole.ORG_ADMIN &&
     actor.role !== UserRole.STAFF
@@ -468,13 +496,13 @@ export async function closeTicket(
       throw createServiceError("Ticket not found", 404);
     }
 
-    // Role-based closure constraint:
-    // Store managers can only close tickets for their own store
+    // Unlike general ticket reads, closing across stores is an explicit
+    // authorization failure for STAFF, not a hidden 404.
     if (actor.role === UserRole.STAFF) {
       const storeId = await getUserStoreId(actor.id, organisationId);
-      if (storeId && ticket.propertyId !== storeId) {
+      if (!storeId || ticket.propertyId !== storeId) {
         throw createServiceError(
-          "Forbidden: Store managers can only close tickets for their own store",
+          "Store managers can only close tickets for their own store",
           403
         );
       }
@@ -488,7 +516,6 @@ export async function closeTicket(
     }
 
     const now = new Date();
-    // Maintain or set reopenUntil window
     const reopenUntil =
       ticket.reopenUntil ||
       new Date(now.getTime() + getReopenWindowDurationMs());
@@ -525,7 +552,7 @@ export async function closeTicket(
 }
 
 /**
- * Reopens a CLOSED ticket if within the permitted reopening window.
+ * Reopens a CLOSED ticket within the configured reopening window.
  */
 export async function reopenTicket(
   ticketId: string,
@@ -542,6 +569,8 @@ export async function reopenTicket(
       throw createServiceError("Ticket not found", 404);
     }
 
+    await assertStoreAccess(ticket, actor, organisationId);
+
     if (!isValidTransition(ticket.status, TicketStatus.REOPENED)) {
       throw createServiceError(
         `Cannot reopen ticket in status ${ticket.status}. Must be CLOSED.`,
@@ -549,7 +578,6 @@ export async function reopenTicket(
       );
     }
 
-    // Validate reopening window
     if (!isReopenWindowActive(ticket.reopenUntil)) {
       throw createServiceError(
         "Reopening window has expired. Ticket cannot be reopened.",
@@ -589,7 +617,7 @@ export async function reopenTicket(
 }
 
 /**
- * Generic status transition (e.g. ASSIGNED -> IN_PROGRESS, IN_PROGRESS <-> ON_HOLD).
+ * Handles generic ticket status transitions.
  */
 export async function updateTicketStatus({
   ticketId,
@@ -602,13 +630,14 @@ export async function updateTicketStatus({
   actor: AuthenticatedUser;
   newStatus: TicketStatus;
 }) {
-  // Delegate specialized endpoints when appropriate
   if (newStatus === TicketStatus.RESOLVED) {
     return resolveTicket(ticketId, organisationId, actor);
   }
+
   if (newStatus === TicketStatus.CLOSED) {
     return closeTicket(ticketId, organisationId, actor);
   }
+
   if (newStatus === TicketStatus.REOPENED) {
     return reopenTicket(ticketId, organisationId, actor);
   }
@@ -621,6 +650,8 @@ export async function updateTicketStatus({
     if (!ticket) {
       throw createServiceError("Ticket not found", 404);
     }
+
+    await assertStoreAccess(ticket, actor, organisationId);
 
     if (!isValidTransition(ticket.status, newStatus)) {
       throw createServiceError(
@@ -657,13 +688,12 @@ export async function updateTicketStatus({
 }
 
 /**
- * Retrieves chronological audit event history for a ticket.
+ * Retrieves chronological event history for a ticket.
  */
 export async function getTicketEvents(
   ticketId: string,
   organisationId: string
 ) {
-  // Confirm ticket exists in tenant
   const ticket = await prisma.ticket.findUnique({
     where: {
       id_organisationId: {

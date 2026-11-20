@@ -1,3 +1,4 @@
+
 import { Request, Response, NextFunction } from "express";
 import { sendSuccess, sendError } from "../utils/apiResponse";
 import * as ticketService from "../services/ticket.service";
@@ -106,7 +107,7 @@ export async function triageTicketController(
   }
 }
 
-// 5. Assign ticket (concurrency safe)
+// 5. Assign ticket
 export async function assignTicketController(
   req: Request,
   res: Response,

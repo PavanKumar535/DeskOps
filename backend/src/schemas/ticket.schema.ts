@@ -1,3 +1,4 @@
+
 import { z } from "zod";
 
 export const createTicketSchema = z.object({
@@ -32,7 +33,7 @@ export const updateTicketStatusSchema = z.object({
       "REOPENED",
     ],
     {
-      message: "Invalid ticket status.",
+      message: "Invalid ticket status. Please provide a valid status.",
     }
   ),
 });
