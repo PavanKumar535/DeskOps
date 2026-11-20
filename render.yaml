@@ -27,11 +27,10 @@ services:
           name: deskops-frontend-staging
           property: host
 
-  # Frontend Static Site
+    # Frontend Static Site
   - type: web
     name: deskops-frontend-staging
-    env: static
-    plan: free
+    runtime: static
     rootDir: frontend
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
