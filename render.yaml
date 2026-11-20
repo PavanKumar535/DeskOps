@@ -1,3 +1,4 @@
+
 services:
   # Backend Web Service
   - type: web
@@ -31,7 +32,6 @@ services:
     name: deskops-frontend-staging
     env: static
     plan: free
-    region: oregon
     rootDir: frontend
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
