@@ -260,7 +260,11 @@ export async function getTicketEventsController(
     }
 
     const id = getParamId(req);
-    const events = await ticketService.getTicketEvents(id, req.tenantId);
+    const events = await ticketService.getTicketEvents(
+      id,
+      req.tenantId,
+      req.user
+    );
 
     return sendSuccess(res, { events });
   } catch (err: any) {
