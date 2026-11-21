@@ -94,6 +94,16 @@ export async function createTicket(
       throw createServiceError("Unit not found in property", 404);
     }
 
+    if (actor.role === UserRole.STAFF) {
+      const storeId = await getUserStoreId(actor.id, organisationId);
+      if (!storeId || input.propertyId !== storeId) {
+        throw createServiceError(
+          "Store managers can only create tickets for their own store",
+          403
+        );
+      }
+    }
+
     const priority =
       (input.priority as TicketPriority) || TicketPriority.MEDIUM;
 
@@ -692,7 +702,8 @@ export async function updateTicketStatus({
  */
 export async function getTicketEvents(
   ticketId: string,
-  organisationId: string
+  organisationId: string,
+  actor?: AuthenticatedUser
 ) {
   const ticket = await prisma.ticket.findUnique({
     where: {
@@ -701,11 +712,15 @@ export async function getTicketEvents(
         organisationId,
       },
     },
-    select: { id: true },
+    select: { id: true, propertyId: true },
   });
 
   if (!ticket) {
     throw createServiceError("Ticket not found", 404);
+  }
+
+  if (actor) {
+    await assertStoreAccess(ticket, actor, organisationId);
   }
 
   return prisma.ticketEvent.findMany({

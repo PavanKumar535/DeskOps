@@ -361,12 +361,12 @@ describe("Complete Ticket Lifecycle, Event History, Permissions & Concurrency Su
     });
   });
 
-  describe("5. Role-Based Permissions & Simulated Client Rules", () => {
-    it("Store Manager (STAFF) can close ticket for their OWN store", async () => {
+  describe("5. Role-Based Permissions & Greenfield Client-Specific Rules (FR-1.08)", () => {
+    it("1. Store Manager successfully closes a ticket in their own store", async () => {
       // Ticket in Store 1 (Acme Tower) - managerA belongs to Store 1
       const ticketStore1 = await prisma.ticket.create({
         data: {
-          title: "Store 1 Maintenance",
+          title: "Store 1 Maintenance Closure",
           description: "Store 1 ticket in resolved state",
           status: TicketStatus.RESOLVED,
           organisationId: (await prisma.organisation.findFirst({ where: { name: "Acme Facilities Management" } }))!.id,
@@ -385,12 +385,12 @@ describe("Complete Ticket Lifecycle, Event History, Permissions & Concurrency Su
       expect(res.body.data.ticket.status).toBe("CLOSED");
     });
 
-    it("Store Manager (STAFF) is DENIED from closing ticket for ANOTHER store in same organisation", async () => {
+    it("2. Store Manager receives an appropriate denial when closing another store's ticket", async () => {
       // Ticket in Store 2 (Acme Plaza)
       const unit2 = await prisma.unit.findFirst({ where: { propertyId: orgAProp2Id } });
       const ticketStore2 = await prisma.ticket.create({
         data: {
-          title: "Store 2 Maintenance",
+          title: "Store 2 Maintenance Close Denial",
           description: "Store 2 ticket in resolved state",
           status: TicketStatus.RESOLVED,
           organisationId: (await prisma.organisation.findFirst({ where: { name: "Acme Facilities Management" } }))!.id,
@@ -410,12 +410,134 @@ describe("Complete Ticket Lifecycle, Event History, Permissions & Concurrency Su
       expect(res.body.message).toContain("Store managers can only close tickets for their own store");
     });
 
-    it("Head Office Admin (ORG_ADMIN) CAN close tickets for ANY store", async () => {
+    it("3. Store Manager cannot retrieve another store's ticket by ID", async () => {
       const unit2 = await prisma.unit.findFirst({ where: { propertyId: orgAProp2Id } });
       const ticketStore2 = await prisma.ticket.create({
         data: {
-          title: "Store 2 Head Office Closure",
-          description: "Head office closure across stores",
+          title: "Store 2 Confidential Ticket Detail",
+          description: "Store 2 ticket that Store 1 manager must not retrieve",
+          status: TicketStatus.NEW,
+          organisationId: (await prisma.organisation.findFirst({ where: { name: "Acme Facilities Management" } }))!.id,
+          propertyId: orgAProp2Id,
+          unitId: unit2!.id,
+          createdById: (await prisma.user.findFirst({ where: { email: "resident@acme.com" } }))!.id,
+        },
+      });
+
+      // Attempting to read details of another store's ticket returns 404 (preventing leakage)
+      const res = await request(app)
+        .get(`/api/v1/tickets/${ticketStore2.id}`)
+        .set("Authorization", `Bearer ${orgAManagerToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.status).toBe("error");
+      expect(res.body.message).toBe("Ticket not found");
+    });
+
+    it("4. Store Manager cannot retrieve another store's ticket event history", async () => {
+      const unit2 = await prisma.unit.findFirst({ where: { propertyId: orgAProp2Id } });
+      const ticketStore2 = await prisma.ticket.create({
+        data: {
+          title: "Store 2 Timeline Audit Ticket",
+          description: "Store 2 ticket events that Store 1 manager must not inspect",
+          status: TicketStatus.NEW,
+          organisationId: (await prisma.organisation.findFirst({ where: { name: "Acme Facilities Management" } }))!.id,
+          propertyId: orgAProp2Id,
+          unitId: unit2!.id,
+          createdById: (await prisma.user.findFirst({ where: { email: "resident@acme.com" } }))!.id,
+        },
+      });
+
+      // Record an event on this ticket
+      await prisma.ticketEvent.create({
+        data: {
+          organisationId: (await prisma.organisation.findFirst({ where: { name: "Acme Facilities Management" } }))!.id,
+          ticketId: ticketStore2.id,
+          eventType: "TICKET_CREATED",
+          newStatus: TicketStatus.NEW,
+          description: "Created in Store 2",
+        },
+      });
+
+      // Store Manager requesting event history for another store's ticket must receive 404
+      const eventsRes = await request(app)
+        .get(`/api/v1/tickets/${ticketStore2.id}/events`)
+        .set("Authorization", `Bearer ${orgAManagerToken}`);
+
+      expect(eventsRes.status).toBe(404);
+      expect(eventsRes.body.status).toBe("error");
+      expect(eventsRes.body.message).toBe("Ticket not found");
+    });
+
+    it("5 & 6. Store Manager ticket listing explicitly creates tickets in two different stores and verifies other store's ticket is excluded", async () => {
+      const timestamp = Date.now();
+      const orgA = (await prisma.organisation.findFirst({ where: { name: "Acme Facilities Management" } }))!;
+      const unit2 = (await prisma.unit.findFirst({ where: { propertyId: orgAProp2Id } }))!;
+
+      // 1. Explicitly create a ticket in Store 1 (Manager's own store)
+      const store1Ticket = await prisma.ticket.create({
+        data: {
+          title: `Explicit Store 1 Ticket ${timestamp}`,
+          description: "Belongs to Store 1 Acme Tower",
+          status: TicketStatus.NEW,
+          organisationId: orgA.id,
+          propertyId: orgAProp1Id,
+          unitId: orgAUnit1Id,
+          createdById: (await prisma.user.findFirst({ where: { email: "resident@acme.com" } }))!.id,
+        },
+      });
+
+      // 2. Explicitly create a ticket in Store 2 (Different store)
+      const store2Ticket = await prisma.ticket.create({
+        data: {
+          title: `Explicit Store 2 Ticket ${timestamp}`,
+          description: "Belongs to Store 2 Acme Plaza",
+          status: TicketStatus.NEW,
+          organisationId: orgA.id,
+          propertyId: orgAProp2Id,
+          unitId: unit2.id,
+          createdById: (await prisma.user.findFirst({ where: { email: "resident@acme.com" } }))!.id,
+        },
+      });
+
+      // 3. Store Manager calls ticket listing API
+      const res = await request(app)
+        .get("/api/v1/tickets")
+        .set("Authorization", `Bearer ${orgAManagerToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("success");
+      const returnedTickets = res.body.data.tickets;
+      const returnedIds = returnedTickets.map((t: any) => t.id);
+
+      // Verify Store 1 ticket is included
+      expect(returnedIds).toContain(store1Ticket.id);
+
+      // Verify Store 2 ticket is strictly excluded
+      expect(returnedIds).not.toContain(store2Ticket.id);
+
+      // Verify every returned ticket belongs strictly to Store 1
+      for (const t of returnedTickets) {
+        expect(t.propertyId).toBe(orgAProp1Id);
+      }
+
+      // 4. Verify Head Office admin CAN see both tickets in their listing
+      const adminRes = await request(app)
+        .get("/api/v1/tickets")
+        .set("Authorization", `Bearer ${orgAAdminToken}`);
+
+      expect(adminRes.status).toBe(200);
+      const adminIds = adminRes.body.data.tickets.map((t: any) => t.id);
+      expect(adminIds).toContain(store1Ticket.id);
+      expect(adminIds).toContain(store2Ticket.id);
+    });
+
+    it("7. Head Office can close another store's ticket within the same organisation", async () => {
+      const unit2 = await prisma.unit.findFirst({ where: { propertyId: orgAProp2Id } });
+      const ticketStore2 = await prisma.ticket.create({
+        data: {
+          title: "Store 2 Head Office Cross-Store Closure",
+          description: "Head office closure across stores within same org",
           status: TicketStatus.RESOLVED,
           organisationId: (await prisma.organisation.findFirst({ where: { name: "Acme Facilities Management" } }))!.id,
           propertyId: orgAProp2Id,
@@ -433,7 +555,26 @@ describe("Complete Ticket Lifecycle, Event History, Permissions & Concurrency Su
       expect(res.body.data.ticket.status).toBe("CLOSED");
     });
 
-    it("Resident is DENIED from closing tickets", async () => {
+    it("8. Head Office cannot close a ticket belonging to another organisation", async () => {
+      const orgB = await prisma.organisation.findFirst({
+        where: { name: "Apex Property Holdings" },
+      });
+      const ticketOrgB = await prisma.ticket.findFirst({
+        where: { organisationId: orgB!.id },
+      });
+
+      expect(ticketOrgB).toBeDefined();
+
+      const res = await request(app)
+        .post(`/api/v1/tickets/${ticketOrgB!.id}/close`)
+        .set("Authorization", `Bearer ${orgAAdminToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.status).toBe("error");
+      expect(res.body.message).toBe("Ticket not found");
+    });
+
+    it("9. Residents cannot close tickets unless existing permission rules explicitly allow it", async () => {
       const ticket = await prisma.ticket.create({
         data: {
           title: "Resident Closure Denial",
@@ -453,6 +594,57 @@ describe("Complete Ticket Lifecycle, Event History, Permissions & Concurrency Su
 
       expect(res.status).toBe(403);
       expect(res.body.status).toBe("error");
+      expect(res.body.message).toContain("Forbidden: You do not have permission to close tickets");
+    });
+
+    it("Security Edge Case: Store Manager cannot create a ticket for another store by supplying a different propertyId in request body", async () => {
+      const unit2 = await prisma.unit.findFirst({ where: { propertyId: orgAProp2Id } });
+
+      const res = await request(app)
+        .post("/api/v1/tickets")
+        .set("Authorization", `Bearer ${orgAManagerToken}`)
+        .send({
+          title: "Store Manager Cross-Store Creation Attempt",
+          description: "Attempting to create ticket in Store 2 while assigned to Store 1",
+          priority: "HIGH",
+          propertyId: orgAProp2Id, // Foreign store!
+          unitId: unit2!.id,
+        });
+
+      expect(res.status).toBe(403);
+      expect(res.body.status).toBe("error");
+      expect(res.body.message).toContain("Store managers can only create tickets for their own store");
+    });
+
+    it("Security Edge Case: Store Manager cannot triage or assign another store's ticket", async () => {
+      const unit2 = await prisma.unit.findFirst({ where: { propertyId: orgAProp2Id } });
+      const ticketStore2 = await prisma.ticket.create({
+        data: {
+          title: "Store 2 Triage Access Test",
+          description: "Store 2 ticket that manager 1 cannot triage",
+          status: TicketStatus.NEW,
+          organisationId: (await prisma.organisation.findFirst({ where: { name: "Acme Facilities Management" } }))!.id,
+          propertyId: orgAProp2Id,
+          unitId: unit2!.id,
+          createdById: (await prisma.user.findFirst({ where: { email: "resident@acme.com" } }))!.id,
+        },
+      });
+
+      const triageRes = await request(app)
+        .post(`/api/v1/tickets/${ticketStore2.id}/triage`)
+        .set("Authorization", `Bearer ${orgAManagerToken}`)
+        .send({ priority: "URGENT" });
+
+      expect(triageRes.status).toBe(404);
+      expect(triageRes.body.message).toBe("Ticket not found");
+
+      const assignRes = await request(app)
+        .post(`/api/v1/tickets/${ticketStore2.id}/assign`)
+        .set("Authorization", `Bearer ${orgAManagerToken}`)
+        .send({ technicianId: orgATechId });
+
+      expect(assignRes.status).toBe(404);
+      expect(assignRes.body.message).toBe("Ticket not found");
     });
   });
 
