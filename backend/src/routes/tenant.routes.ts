@@ -112,6 +112,12 @@ router.post(
   ticketController.reopenTicketController
 );
 
+// Merge duplicate ticket into original ticket
+router.post(
+  "/tickets/:id/merge",
+  ticketController.mergeTicketsController
+);
+
 // Ticket event timeline
 router.get(
   "/tickets/:id/events",

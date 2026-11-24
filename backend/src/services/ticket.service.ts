@@ -1,3 +1,4 @@
+
 import prisma from "../lib/prisma";
 import {
   isValidTransition,
@@ -731,5 +732,152 @@ export async function getTicketEvents(
         select: { id: true, name: true, email: true, role: true },
       },
     },
+  });
+}
+
+/**
+ * Merges a duplicate ticket into the original ticket.
+ * Transfers comments and watchers, then closes the duplicate.
+ */
+export async function mergeTickets(
+  originalTicketId: string,
+  duplicateTicketId: string,
+  organisationId: string,
+  actor: AuthenticatedUser
+) {
+  if (
+    actor.role !== UserRole.ORG_ADMIN &&
+    actor.role !== UserRole.STAFF
+  ) {
+    throw createServiceError(
+      "Forbidden: You do not have permission to merge tickets",
+      403
+    );
+  }
+
+  if (originalTicketId === duplicateTicketId) {
+    throw createServiceError(
+      "A ticket cannot be merged into itself",
+      400
+    );
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const originalTicket = await tx.ticket.findFirst({
+      where: { id: originalTicketId, organisationId },
+    });
+
+    const duplicateTicket = await tx.ticket.findFirst({
+      where: { id: duplicateTicketId, organisationId },
+    });
+
+    if (!originalTicket || !duplicateTicket) {
+      throw createServiceError("Ticket not found", 404);
+    }
+
+    await assertStoreAccess(originalTicket, actor, organisationId);
+    await assertStoreAccess(duplicateTicket, actor, organisationId);
+
+    if (duplicateTicket.mergedIntoId) {
+      throw createServiceError(
+        "This ticket has already been merged",
+        409
+      );
+    }
+
+    if (originalTicket.mergedIntoId) {
+      throw createServiceError(
+        "Cannot merge into another duplicate ticket",
+        400
+      );
+    }
+
+    const now = new Date();
+
+    // Transfer comments to the original ticket.
+    await tx.comment.updateMany({
+      where: {
+        ticketId: duplicateTicketId,
+        organisationId,
+      },
+      data: {
+        ticketId: originalTicketId,
+      },
+    });
+
+    // Get duplicate ticket watchers.
+    const duplicateWatchers = await tx.ticketWatcher.findMany({
+      where: {
+        ticketId: duplicateTicketId,
+        organisationId,
+      },
+    });
+
+    // Transfer watchers without creating duplicates.
+    if (duplicateWatchers.length > 0) {
+      await tx.ticketWatcher.createMany({
+        data: duplicateWatchers.map((watcher) => ({
+          ticketId: originalTicketId,
+          userId: watcher.userId,
+          organisationId,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    // Remove watchers from the duplicate ticket.
+    await tx.ticketWatcher.deleteMany({
+      where: {
+        ticketId: duplicateTicketId,
+        organisationId,
+      },
+    });
+
+    // Close and link the duplicate ticket.
+    const mergedDuplicate = await tx.ticket.update({
+      where: {
+        id_organisationId: {
+          id: duplicateTicketId,
+          organisationId,
+        },
+      },
+      data: {
+        status: TicketStatus.CLOSED,
+        closedAt: now,
+        mergedIntoId: originalTicketId,
+      },
+    });
+
+    // Record merge event on original ticket.
+    await tx.ticketEvent.create({
+      data: {
+        organisationId,
+        ticketId: originalTicketId,
+        actorId: actor.id,
+        eventType: "TICKET_MERGED",
+        description: `Duplicate ticket ${duplicateTicketId} merged into this ticket by ${actor.name}`,
+        metadata: {
+          duplicateTicketId,
+        },
+      },
+    });
+
+    // Record merge event on duplicate ticket.
+    await tx.ticketEvent.create({
+      data: {
+        organisationId,
+        ticketId: duplicateTicketId,
+        actorId: actor.id,
+        eventType: "TICKET_MERGED_INTO",
+        previousStatus: duplicateTicket.status,
+        newStatus: TicketStatus.CLOSED,
+        description: `Ticket merged into ${originalTicketId} by ${actor.name}`,
+        metadata: {
+          originalTicketId,
+        },
+      },
+    });
+
+    return mergedDuplicate;
   });
 }

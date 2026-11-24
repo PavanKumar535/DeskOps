@@ -1,4 +1,3 @@
-
 import { Request, Response, NextFunction } from "express";
 import { sendSuccess, sendError } from "../utils/apiResponse";
 import * as ticketService from "../services/ticket.service";
@@ -12,7 +11,7 @@ function getParamId(req: Request): string {
 export async function createTicketController(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) {
   try {
     if (!req.user || !req.tenantId) {
@@ -22,7 +21,7 @@ export async function createTicketController(
     const ticket = await ticketService.createTicket(
       req.tenantId,
       req.user,
-      req.body
+      req.body,
     );
 
     return sendSuccess(res, { ticket }, "Ticket created successfully", 201);
@@ -38,7 +37,7 @@ export async function createTicketController(
 export async function getTickets(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) {
   try {
     if (!req.user || !req.tenantId) {
@@ -56,7 +55,7 @@ export async function getTickets(
 export async function getTicketById(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) {
   try {
     if (!req.user || !req.tenantId) {
@@ -67,7 +66,7 @@ export async function getTicketById(
     const ticket = await ticketService.getTicketById(
       id,
       req.tenantId,
-      req.user
+      req.user,
     );
 
     return sendSuccess(res, { ticket });
@@ -83,7 +82,7 @@ export async function getTicketById(
 export async function triageTicketController(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) {
   try {
     if (!req.user || !req.tenantId) {
@@ -95,7 +94,7 @@ export async function triageTicketController(
       id,
       req.tenantId,
       req.user,
-      req.body
+      req.body,
     );
 
     return sendSuccess(res, { ticket }, "Ticket triaged successfully");
@@ -111,7 +110,7 @@ export async function triageTicketController(
 export async function assignTicketController(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) {
   try {
     if (!req.user || !req.tenantId) {
@@ -125,7 +124,7 @@ export async function assignTicketController(
       id,
       req.tenantId,
       technicianId,
-      req.user
+      req.user,
     );
 
     return sendSuccess(res, { ticket }, "Ticket assigned successfully");
@@ -141,7 +140,7 @@ export async function assignTicketController(
 export async function updateTicketStatusController(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) {
   try {
     if (!req.user || !req.tenantId) {
@@ -169,7 +168,7 @@ export async function updateTicketStatusController(
 export async function resolveTicketController(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) {
   try {
     if (!req.user || !req.tenantId) {
@@ -181,7 +180,7 @@ export async function resolveTicketController(
       id,
       req.tenantId,
       req.user,
-      req.body?.resolutionNotes
+      req.body?.resolutionNotes,
     );
 
     return sendSuccess(res, { ticket }, "Ticket marked as resolved");
@@ -197,7 +196,7 @@ export async function resolveTicketController(
 export async function closeTicketController(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) {
   try {
     if (!req.user || !req.tenantId) {
@@ -205,11 +204,7 @@ export async function closeTicketController(
     }
 
     const id = getParamId(req);
-    const ticket = await ticketService.closeTicket(
-      id,
-      req.tenantId,
-      req.user
-    );
+    const ticket = await ticketService.closeTicket(id, req.tenantId, req.user);
 
     return sendSuccess(res, { ticket }, "Ticket closed successfully");
   } catch (err: any) {
@@ -224,7 +219,7 @@ export async function closeTicketController(
 export async function reopenTicketController(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) {
   try {
     if (!req.user || !req.tenantId) {
@@ -236,7 +231,7 @@ export async function reopenTicketController(
       id,
       req.tenantId,
       req.user,
-      req.body?.reason
+      req.body?.reason,
     );
 
     return sendSuccess(res, { ticket }, "Ticket reopened successfully");
@@ -252,7 +247,7 @@ export async function reopenTicketController(
 export async function getTicketEventsController(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) {
   try {
     if (!req.user || !req.tenantId) {
@@ -271,6 +266,43 @@ export async function getTicketEventsController(
     if (err.statusCode) {
       return sendError(res, err.message, err.statusCode);
     }
+    next(err);
+  }
+}
+
+export async function mergeTicketsController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    if (!req.user || !req.tenantId) {
+      return sendError(res, "Authentication required", 401);
+    }
+
+    const originalTicketId = getParamId(req);
+    const duplicateTicketId =
+      req.body?.duplicateTicketId ??
+      req.body?.duplicateId ??
+      req.body?.ticketId;
+
+    if (typeof duplicateTicketId !== "string" || !duplicateTicketId.trim()) {
+      return sendError(res, "Duplicate ticket ID is required", 400);
+    }
+
+    const mergedTicket = await ticketService.mergeTickets(
+      originalTicketId,
+      duplicateTicketId,
+      req.tenantId,
+      req.user,
+    );
+
+    return sendSuccess(res, mergedTicket, "Tickets merged successfully");
+  } catch (err: any) {
+    if (err.statusCode) {
+      return sendError(res, err.message, err.statusCode);
+    }
+
     next(err);
   }
 }
