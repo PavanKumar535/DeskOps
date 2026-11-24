@@ -50,6 +50,37 @@ Manage organisation users	No	No	No	Yes
 5. Internal comments must not be visible to residents.
 6. Access restrictions must be checked by the backend API.
 The permissions marked as Optional or To confirm will be finalised after discussion with the team and mentor.
+
+### 3.3 Client-Specific Business Rules (FR-1.08: Coppergate Retail Services)
+
+Each ticket belongs to one physical store, and Store Managers can view and close tickets only for their assigned store, while Head Office users can view and close tickets across all stores within their organisation.
+
+#### Store Manager (STAFF) Restrictions
+- **Store Scoping:** Store Managers can view only tickets belonging to their assigned store (mapped via `user.unit.propertyId`).
+- **Ticket Closure:** Store Managers can close tickets belonging only to their own store.
+- **Direct Retrieval Protection:** Store Managers cannot view another store's ticket, even by directly accessing its ticket ID. Direct requests return `404 Not Found` to prevent information leakage and store enumeration.
+- **Event History Protection:** Store Managers cannot view another store's ticket event history. Requests return `404 Not Found`.
+- **Cross-Store Closure Denial:** Store Managers cannot close another store's ticket. Direct close requests are explicitly rejected with `403 Forbidden` (`"Store managers can only close tickets for their own store"`).
+- **Tampering & Creation Protection:** Store Managers cannot bypass restrictions by modifying request parameters, query strings, or request bodies. Ticket creation is also restricted to the manager's assigned store (`403 Forbidden` if another store's `propertyId` is supplied).
+
+#### Head Office (ORG_ADMIN) Permissions
+- **Multi-Store Access:** Head Office users have organisation-wide visibility across all stores within their organisation.
+- **Multi-Store Closure:** Head Office users can view and close tickets across all stores within their organisation.
+- **Tenant Boundary:** Head Office users cannot access, modify, or close tickets belonging to another organisation (`404 Not Found` via tenant scoping).
+
+#### Resident (RESIDENT) Restrictions
+- Residents can access tickets only for their own unit or created by them.
+- Residents cannot close tickets under any circumstances; close requests are rejected with `403 Forbidden` (`"Forbidden: You do not have permission to close tickets"`).
+
+#### Backend Enforcement Architecture
+- **Server-Side Store Derivation (`getUserStoreId`):** The authenticated user's store identity is resolved on the server from PostgreSQL (`user.unit.propertyId`) using `getUserStoreId(userId, organisationId)`. Client-supplied store IDs in request bodies or parameters are never trusted.
+- **Store Access Assertion (`assertStoreAccess`):** For `STAFF` users, `assertStoreAccess(ticket, actor, organisationId)` validates that `ticket.propertyId === storeId`. Any mismatch results in a `404 Not Found` response.
+- **Ticket Listing Enforcement:** In `getTickets()`, listing queries for `STAFF` are strictly filtered by `where.propertyId = storeId` on the backend.
+- **Ticket Retrieval Enforcement:** In `getTicketById()`, `assertStoreAccess()` blocks unauthorized reads with `404 Not Found`.
+- **Event History Enforcement:** In `getTicketEvents()`, `assertStoreAccess()` blocks unauthorized timeline reads with `404 Not Found`.
+- **Ticket Closure Enforcement:** In `closeTicket()`, explicit authorization verifies that `actor.role === STAFF` matches `ticket.propertyId === storeId`, returning `403 Forbidden` on mismatch.
+- **Organisation-Level Tenant Isolation:** Tenant-scoped ticket operations enforce organisation-level isolation through the existing Prisma queries, composite keys where applicable, and tenant middleware.
+
 Every ticket must follow a controlled workflow.
 
 The statuses specified in the project requirements are:
@@ -116,7 +147,7 @@ The following points need to be discussed before implementation:
 3. Whether technicians can close tickets directly.
 4. Whether residents can reopen tickets.
 5. Exact ticket reopening duration.
-6. Final confirmation of the team-specific client requirement.
+6. Team-specific client requirement (FR-1.08: Coppergate Retail Services) – Approved and fully implemented.
 This is the initial technical design draft prepared using the DeskOps Phase 1 requirements and the supplied development guides.
 
-The permission matrix and workflow decisions will be reviewed with the team and mentor. Changes will be incorporated into the document before final approval.
+The FR-1.08 client-specific permission rules have been documented and implemented. Any further changes will be incorporated following team and mentor review.
