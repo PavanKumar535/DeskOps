@@ -71,7 +71,7 @@ describe("CR-1: Ticket Merge", () => {
     await prisma.$disconnect();
   });
 
-  it("should merge duplicate ticket and transfer comments and watchers", async () => {
+  it("should merge duplicate ticket, transfer comments and watchers, prevent duplicate watchers, and record merge events", async () => {
     // Create original ticket
     const original = await request(app)
       .post("/api/v1/tickets")
@@ -116,7 +116,15 @@ describe("CR-1: Ticket Merge", () => {
       },
     });
 
-    // Add watcher to duplicate ticket
+    // Add the same watcher to both tickets
+    await prisma.ticketWatcher.create({
+      data: {
+        organisationId,
+        ticketId: originalTicketId,
+        userId: adminId,
+      },
+    });
+
     await prisma.ticketWatcher.create({
       data: {
         organisationId,
@@ -167,7 +175,7 @@ describe("CR-1: Ticket Merge", () => {
 
     expect(remainingComments).toBe(0);
 
-    // Verify watcher moved to original ticket
+    // Verify watcher exists on original ticket
     const movedWatcher = await prisma.ticketWatcher.findFirst({
       where: {
         ticketId: originalTicketId,
@@ -178,6 +186,17 @@ describe("CR-1: Ticket Merge", () => {
 
     expect(movedWatcher).not.toBeNull();
 
+    // Verify duplicate watcher was not created on original ticket
+    const originalWatcherCount = await prisma.ticketWatcher.count({
+      where: {
+        ticketId: originalTicketId,
+        userId: adminId,
+        organisationId,
+      },
+    });
+
+    expect(originalWatcherCount).toBe(1);
+
     // Verify no watchers remain on duplicate ticket
     const remainingWatchers = await prisma.ticketWatcher.count({
       where: {
@@ -187,5 +206,29 @@ describe("CR-1: Ticket Merge", () => {
     });
 
     expect(remainingWatchers).toBe(0);
+
+    // Verify merge event on original ticket
+    const originalMergeEvent = await prisma.ticketEvent.findFirst({
+      where: {
+        ticketId: originalTicketId,
+        organisationId,
+        eventType: "TICKET_MERGED",
+      },
+    });
+
+    expect(originalMergeEvent).not.toBeNull();
+    expect(originalMergeEvent?.actorId).toBe(adminId);
+
+    // Verify merge event on duplicate ticket
+    const duplicateMergeEvent = await prisma.ticketEvent.findFirst({
+      where: {
+        ticketId: duplicateTicketId,
+        organisationId,
+        eventType: "TICKET_MERGED_INTO",
+      },
+    });
+
+    expect(duplicateMergeEvent).not.toBeNull();
+    expect(duplicateMergeEvent?.actorId).toBe(adminId);
   });
 });
