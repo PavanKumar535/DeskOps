@@ -27,17 +27,21 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Modals / Dialog state
+  // Modal states
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [showTriageModal, setShowTriageModal] = useState(false);
-  const [triagePriority, setTriagePriority] = useState<string>("HIGH");
-  const [triageCategory, setTriageCategory] = useState<string>("");
+  const [triagePriority, setTriagePriority] = useState("HIGH");
+  const [triageCategory, setTriageCategory] = useState("");
 
   const [showResolveModal, setShowResolveModal] = useState(false);
-  const [resolutionNotes, setResolutionNotes] = useState<string>("");
+  const [resolutionNotes, setResolutionNotes] = useState("");
 
   const [showReopenModal, setShowReopenModal] = useState(false);
-  const [reopenReason, setReopenReason] = useState<string>("");
+  const [reopenReason, setReopenReason] = useState("");
+
+  // CR-1 Merge states
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [duplicateTicketId, setDuplicateTicketId] = useState("");
 
   useEffect(() => {
     fetchTicketDetails();
@@ -47,10 +51,17 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
   const fetchTicketDetails = async () => {
     setLoading(true);
     setError(null);
+
     try {
-      const res = await apiRequest<{ ticket: Ticket }>(`/api/v1/tickets/${ticketId}`, {}, token);
+      const res = await apiRequest<{ ticket: Ticket }>(
+        `/api/v1/tickets/${ticketId}`,
+        {},
+        token,
+      );
+
       if (res.success && res.data?.ticket) {
         setTicket(res.data.ticket);
+
         if (res.data.ticket.events) {
           setEvents(res.data.ticket.events);
         }
@@ -66,12 +77,14 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
 
   const fetchEvents = async () => {
     setEventsLoading(true);
+
     try {
       const res = await apiRequest<{ events: TicketEvent[] }>(
         `/api/v1/tickets/${ticketId}/events`,
         {},
-        token
+        token,
       );
+
       if (res.success && res.data?.events) {
         setEvents(res.data.events);
       }
@@ -83,9 +96,11 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
   };
 
   const handleRefresh = async () => {
-    await fetchTicketDetails();
-    await fetchEvents();
-    if (onTicketUpdated) onTicketUpdated();
+    await Promise.all([fetchTicketDetails(), fetchEvents()]);
+
+    if (onTicketUpdated) {
+      onTicketUpdated();
+    }
   };
 
   // 1. Triage action
@@ -105,13 +120,13 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
             category: triageCategory || ticket?.category || "General",
           }),
         },
-        token
+        token,
       );
 
       if (res.success && res.data?.ticket) {
         setSuccessMessage("Ticket triaged successfully!");
         setShowTriageModal(false);
-        handleRefresh();
+        await handleRefresh();
       } else {
         setError(res.error || "Failed to triage ticket");
       }
@@ -122,7 +137,7 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
     }
   };
 
-  // 2. Generic Status transition (Move to IN_PROGRESS, ON_HOLD)
+  // 2. Generic status transition
   const handleStatusChange = async (newStatus: string) => {
     setActionLoading(true);
     setError(null);
@@ -135,12 +150,12 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
           method: "PATCH",
           body: JSON.stringify({ status: newStatus }),
         },
-        token
+        token,
       );
 
       if (res.success && res.data?.ticket) {
         setSuccessMessage(`Ticket transitioned to ${newStatus}`);
-        handleRefresh();
+        await handleRefresh();
       } else {
         setError(res.error || `Failed to update status to ${newStatus}`);
       }
@@ -165,14 +180,14 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
           method: "POST",
           body: JSON.stringify({ resolutionNotes }),
         },
-        token
+        token,
       );
 
       if (res.success && res.data?.ticket) {
         setSuccessMessage("Ticket resolved successfully!");
         setShowResolveModal(false);
         setResolutionNotes("");
-        handleRefresh();
+        await handleRefresh();
       } else {
         setError(res.error || "Failed to resolve ticket");
       }
@@ -185,7 +200,9 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
 
   // 4. Close action
   const handleCloseTicket = async () => {
-    if (!window.confirm("Are you sure you want to mark this ticket as CLOSED?")) {
+    if (
+      !window.confirm("Are you sure you want to mark this ticket as CLOSED?")
+    ) {
       return;
     }
 
@@ -197,12 +214,12 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
       const res = await apiRequest<{ ticket: Ticket }>(
         `/api/v1/tickets/${ticketId}/close`,
         { method: "POST" },
-        token
+        token,
       );
 
       if (res.success && res.data?.ticket) {
         setSuccessMessage("Ticket officially closed!");
-        handleRefresh();
+        await handleRefresh();
       } else {
         setError(res.error || "Failed to close ticket");
       }
@@ -227,19 +244,80 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
           method: "POST",
           body: JSON.stringify({ reason: reopenReason }),
         },
-        token
+        token,
       );
 
       if (res.success && res.data?.ticket) {
         setSuccessMessage("Ticket reopened successfully!");
         setShowReopenModal(false);
         setReopenReason("");
-        handleRefresh();
+        await handleRefresh();
       } else {
         setError(res.error || "Failed to reopen ticket");
       }
     } catch (err: any) {
       setError(err.message || "Network error while reopening ticket");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // 6. CR-1: Merge duplicate ticket into current original ticket
+  const handleMergeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const duplicateId = duplicateTicketId.trim();
+
+    if (!duplicateId) {
+      setError("Please enter the duplicate ticket ID.");
+      return;
+    }
+
+    if (duplicateId === ticketId) {
+      setError("A ticket cannot be merged into itself.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Are you sure you want to merge this duplicate ticket? " +
+        "The duplicate will be closed and its comments and watchers " +
+        "will be moved to the current ticket.",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setActionLoading(true);
+    setError(null);
+    setSuccessMessage(null);
+
+    try {
+      const res = await apiRequest<{ ticket: Ticket }>(
+        `/api/v1/tickets/${ticketId}/merge`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            duplicateTicketId: duplicateId,
+          }),
+        },
+        token,
+      );
+
+      if (res.success) {
+        setSuccessMessage(
+          "Tickets merged successfully! The duplicate ticket has been closed.",
+        );
+
+        setShowMergeModal(false);
+        setDuplicateTicketId("");
+
+        await handleRefresh();
+      } else {
+        setError(res.error || "Failed to merge tickets.");
+      }
+    } catch (err: any) {
+      setError(err.message || "Network error while merging tickets.");
     } finally {
       setActionLoading(false);
     }
@@ -260,6 +338,7 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
     return (
       <div className="card">
         <div className="alert alert-error">{error || "Ticket not found."}</div>
+
         <button className="btn-secondary" onClick={onBack}>
           &larr; Back to Tickets List
         </button>
@@ -268,10 +347,13 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
   }
 
   // Check reopen window
-  const isReopenActive = ticket.reopenUntil ? new Date().getTime() <= new Date(ticket.reopenUntil).getTime() : false;
+  const isReopenActive = ticket.reopenUntil
+    ? new Date().getTime() <= new Date(ticket.reopenUntil).getTime()
+    : false;
 
-  // Check role permission for closure: ORG_ADMIN or STAFF (Store Manager)
+  // Permissions
   const canClose = user.role === "ORG_ADMIN" || user.role === "STAFF";
+  const canMerge = user.role === "ORG_ADMIN" || user.role === "STAFF";
 
   return (
     <div className="ticket-detail-view">
@@ -280,28 +362,45 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
         <button className="btn-back" onClick={onBack}>
           &larr; Back to Tickets
         </button>
+
         <div className="top-nav-right">
-          <button className="btn-refresh" onClick={handleRefresh} disabled={actionLoading}>
+          <button
+            className="btn-refresh"
+            onClick={handleRefresh}
+            disabled={actionLoading}
+          >
             Refresh
           </button>
         </div>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
-      {successMessage && <div className="alert alert-success">{successMessage}</div>}
+
+      {successMessage && (
+        <div className="alert alert-success">{successMessage}</div>
+      )}
 
       {/* Main Ticket Card */}
       <div className="card ticket-main-card">
         <div className="ticket-main-header">
           <div>
-            <div className="ticket-id-tag">TICKET #{ticket.id.substring(0, 8)}</div>
+            <div className="ticket-id-tag">
+              TICKET #{ticket.id.substring(0, 8)}
+            </div>
+
             <h2 className="ticket-title">{ticket.title}</h2>
           </div>
+
           <div className="ticket-header-badges">
-            <span className={`priority-tag priority-${ticket.priority.toLowerCase()}`}>
+            <span
+              className={`priority-tag priority-${ticket.priority.toLowerCase()}`}
+            >
               {ticket.priority}
             </span>
-            <span className={`status-tag status-${ticket.status.toLowerCase()}`}>
+
+            <span
+              className={`status-tag status-${ticket.status.toLowerCase()}`}
+            >
               {ticket.status}
             </span>
           </div>
@@ -333,14 +432,19 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
           <div className="meta-block">
             <span className="meta-title">Raised By</span>
             <strong>{ticket.creator?.name || "Tenant Resident"}</strong>
-            <small>{ticket.creator?.email} ({ticket.creator?.role})</small>
+            <small>
+              {ticket.creator?.email} ({ticket.creator?.role})
+            </small>
           </div>
 
           <div className="meta-block">
             <span className="meta-title">Assigned Technician</span>
+
             {ticket.assignedTo ? (
               <>
-                <strong className="text-tech-name">{ticket.assignedTo.name}</strong>
+                <strong className="text-tech-name">
+                  {ticket.assignedTo.name}
+                </strong>
                 <small>{ticket.assignedTo.email}</small>
               </>
             ) : (
@@ -354,29 +458,42 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
           </div>
         </div>
 
-        {/* Timestamps & Reopen Notice */}
+        {/* Timestamps and Reopen Notice */}
         {(ticket.resolvedAt || ticket.closedAt || ticket.reopenUntil) && (
           <div className="reopen-window-box">
             {ticket.resolvedAt && (
-              <div>Resolved: <strong>{new Date(ticket.resolvedAt).toLocaleString()}</strong></div>
+              <div>
+                Resolved:{" "}
+                <strong>{new Date(ticket.resolvedAt).toLocaleString()}</strong>
+              </div>
             )}
+
             {ticket.closedAt && (
-              <div>Closed: <strong>{new Date(ticket.closedAt).toLocaleString()}</strong></div>
+              <div>
+                Closed:{" "}
+                <strong>{new Date(ticket.closedAt).toLocaleString()}</strong>
+              </div>
             )}
+
             {ticket.reopenUntil && (
-              <div className={`window-status ${isReopenActive ? "window-active" : "window-expired"}`}>
-                Reopening Window: {isReopenActive ? "ACTIVE until " : "EXPIRED on "}
+              <div
+                className={`window-status ${
+                  isReopenActive ? "window-active" : "window-expired"
+                }`}
+              >
+                Reopening Window:{" "}
+                {isReopenActive ? "ACTIVE until " : "EXPIRED on "}
                 <strong>{new Date(ticket.reopenUntil).toLocaleString()}</strong>
               </div>
             )}
           </div>
         )}
 
-        {/* Action Buttons Toolbar */}
+        {/* Lifecycle Actions */}
         <div className="ticket-actions-toolbar">
           <span className="toolbar-label">Lifecycle Actions:</span>
 
-          {/* Action 1: Triage (Only if NEW) */}
+          {/* Triage */}
           {ticket.status === "NEW" && (
             <button
               className="btn-action btn-triage"
@@ -391,7 +508,7 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
             </button>
           )}
 
-          {/* Action 2: Assign Technician (Only if TRIAGED) */}
+          {/* Assign Technician */}
           {ticket.status === "TRIAGED" && (
             <button
               className="btn-action btn-assign"
@@ -402,18 +519,20 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
             </button>
           )}
 
-          {/* Action 3: Start Work / IN_PROGRESS (If ASSIGNED or ON_HOLD) */}
+          {/* Start Work */}
           {(ticket.status === "ASSIGNED" || ticket.status === "ON_HOLD") && (
             <button
               className="btn-action btn-progress"
               onClick={() => handleStatusChange("IN_PROGRESS")}
               disabled={actionLoading}
             >
-              {ticket.status === "ON_HOLD" ? "Resume Work" : "Start Work (In Progress)"}
+              {ticket.status === "ON_HOLD"
+                ? "Resume Work"
+                : "Start Work (In Progress)"}
             </button>
           )}
 
-          {/* Action 4: Hold (If IN_PROGRESS) */}
+          {/* Hold */}
           {ticket.status === "IN_PROGRESS" && (
             <button
               className="btn-action btn-hold"
@@ -424,7 +543,7 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
             </button>
           )}
 
-          {/* Action 5: Resolve (If IN_PROGRESS) */}
+          {/* Resolve */}
           {ticket.status === "IN_PROGRESS" && (
             <button
               className="btn-action btn-resolve"
@@ -435,7 +554,7 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
             </button>
           )}
 
-          {/* Action 6: Close (If RESOLVED) */}
+          {/* Close */}
           {ticket.status === "RESOLVED" && canClose && (
             <button
               className="btn-action btn-close"
@@ -446,20 +565,39 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
             </button>
           )}
 
-          {/* Action 7: Reopen (If CLOSED) */}
+          {/* Reopen */}
           {ticket.status === "CLOSED" && (
             <button
-              className={`btn-action btn-reopen ${!isReopenActive ? "btn-disabled" : ""}`}
+              className={`btn-action btn-reopen ${
+                !isReopenActive ? "btn-disabled" : ""
+              }`}
               onClick={() => {
                 if (!isReopenActive) {
-                  alert("The permitted reopening window has expired. Ticket cannot be reopened.");
+                  alert(
+                    "The permitted reopening window has expired. Ticket cannot be reopened.",
+                  );
                   return;
                 }
+
                 setShowReopenModal(true);
               }}
               disabled={actionLoading || !isReopenActive}
             >
               Reopen Ticket
+            </button>
+          )}
+
+          {/* CR-1 Merge Duplicate Ticket */}
+          {canMerge && (
+            <button
+              className="btn-action"
+              onClick={() => {
+                setError(null);
+                setShowMergeModal(true);
+              }}
+              disabled={actionLoading}
+            >
+              Merge Duplicate Ticket
             </button>
           )}
         </div>
@@ -470,7 +608,7 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
         <TicketTimeline events={events} loading={eventsLoading} />
       </div>
 
-      {/* Modal 1: Assign Technician Modal */}
+      {/* Assign Technician Modal */}
       {showAssignModal && (
         <AssignModal
           ticket={ticket}
@@ -484,23 +622,33 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
         />
       )}
 
-      {/* Modal 2: Triage Modal */}
+      {/* Triage Modal */}
       {showTriageModal && (
-        <div className="modal-overlay" onClick={() => setShowTriageModal(false)}>
+        <div
+          className="modal-overlay"
+          onClick={() => setShowTriageModal(false)}
+        >
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Triage Ticket</h3>
-              <button className="btn-close-modal" onClick={() => setShowTriageModal(false)}>
+
+              <button
+                className="btn-close-modal"
+                onClick={() => setShowTriageModal(false)}
+              >
                 &times;
               </button>
             </div>
+
             <form onSubmit={handleTriageSubmit}>
               <div className="modal-body">
                 <p className="modal-info-text">
                   Set verified priority and classification before dispatching.
                 </p>
+
                 <div className="form-group">
                   <label htmlFor="triage-prio">Verified Priority *</label>
+
                   <select
                     id="triage-prio"
                     value={triagePriority}
@@ -512,8 +660,10 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
                     <option value="URGENT">Urgent</option>
                   </select>
                 </div>
+
                 <div className="form-group">
                   <label htmlFor="triage-cat">Category</label>
+
                   <input
                     id="triage-cat"
                     type="text"
@@ -523,6 +673,7 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
                   />
                 </div>
               </div>
+
               <div className="modal-footer">
                 <button
                   type="button"
@@ -531,7 +682,12 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary" disabled={actionLoading}>
+
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={actionLoading}
+                >
                   {actionLoading ? "Saving..." : "Confirm Triage"}
                 </button>
               </div>
@@ -540,20 +696,31 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
         </div>
       )}
 
-      {/* Modal 3: Resolve Modal */}
+      {/* Resolve Modal */}
       {showResolveModal && (
-        <div className="modal-overlay" onClick={() => setShowResolveModal(false)}>
+        <div
+          className="modal-overlay"
+          onClick={() => setShowResolveModal(false)}
+        >
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Resolve Maintenance Ticket</h3>
-              <button className="btn-close-modal" onClick={() => setShowResolveModal(false)}>
+
+              <button
+                className="btn-close-modal"
+                onClick={() => setShowResolveModal(false)}
+              >
                 &times;
               </button>
             </div>
+
             <form onSubmit={handleResolveSubmit}>
               <div className="modal-body">
                 <div className="form-group">
-                  <label htmlFor="resolution-notes">Resolution Summary Notes</label>
+                  <label htmlFor="resolution-notes">
+                    Resolution Summary Notes
+                  </label>
+
                   <textarea
                     id="resolution-notes"
                     rows={4}
@@ -561,11 +728,14 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
                     value={resolutionNotes}
                     onChange={(e) => setResolutionNotes(e.target.value)}
                   />
+
                   <small className="form-hint">
-                    Resolving will calculate and activate the tenant's permitted reopening window.
+                    Resolving will calculate and activate the tenant's permitted
+                    reopening window.
                   </small>
                 </div>
               </div>
+
               <div className="modal-footer">
                 <button
                   type="button"
@@ -574,7 +744,12 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary" disabled={actionLoading}>
+
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={actionLoading}
+                >
                   {actionLoading ? "Resolving..." : "Mark as Resolved"}
                 </button>
               </div>
@@ -583,20 +758,29 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
         </div>
       )}
 
-      {/* Modal 4: Reopen Modal */}
+      {/* Reopen Modal */}
       {showReopenModal && (
-        <div className="modal-overlay" onClick={() => setShowReopenModal(false)}>
+        <div
+          className="modal-overlay"
+          onClick={() => setShowReopenModal(false)}
+        >
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Reopen Closed Ticket</h3>
-              <button className="btn-close-modal" onClick={() => setShowReopenModal(false)}>
+
+              <button
+                className="btn-close-modal"
+                onClick={() => setShowReopenModal(false)}
+              >
                 &times;
               </button>
             </div>
+
             <form onSubmit={handleReopenSubmit}>
               <div className="modal-body">
                 <div className="form-group">
                   <label htmlFor="reopen-reason">Reason for Reopening *</label>
+
                   <textarea
                     id="reopen-reason"
                     rows={3}
@@ -607,6 +791,7 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
                   />
                 </div>
               </div>
+
               <div className="modal-footer">
                 <button
                   type="button"
@@ -615,8 +800,86 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary" disabled={actionLoading}>
+
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={actionLoading}
+                >
                   {actionLoading ? "Reopening..." : "Confirm Reopen"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* CR-1 Merge Duplicate Ticket Modal */}
+      {showMergeModal && (
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            if (!actionLoading) setShowMergeModal(false);
+          }}
+        >
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Merge Duplicate Ticket</h3>
+
+              <button
+                className="btn-close-modal"
+                onClick={() => setShowMergeModal(false)}
+                disabled={actionLoading}
+              >
+                &times;
+              </button>
+            </div>
+
+            <form onSubmit={handleMergeSubmit}>
+              <div className="modal-body">
+                <p className="modal-info-text">
+                  Current ticket <strong>#{ticket.id.substring(0, 8)}</strong>{" "}
+                  will remain the original ticket.
+                </p>
+
+                <div className="form-group">
+                  <label htmlFor="duplicate-ticket-id">
+                    Duplicate Ticket ID *
+                  </label>
+
+                  <input
+                    id="duplicate-ticket-id"
+                    type="text"
+                    value={duplicateTicketId}
+                    onChange={(e) => setDuplicateTicketId(e.target.value)}
+                    placeholder="Enter duplicate ticket ID (e.g. fc9c4b20)"
+                    required
+                    disabled={actionLoading}
+                  />
+                </div>
+
+                <small className="form-hint">
+                  The duplicate ticket will be closed. Its comments and watchers
+                  will be moved to the original ticket.
+                </small>
+              </div>
+
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn-cancel"
+                  onClick={() => setShowMergeModal(false)}
+                  disabled={actionLoading}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={actionLoading || !duplicateTicketId.trim()}
+                >
+                  {actionLoading ? "Merging..." : "Confirm Merge"}
                 </button>
               </div>
             </form>

@@ -755,20 +755,62 @@ export async function mergeTickets(
     );
   }
 
-  if (originalTicketId === duplicateTicketId) {
+  const duplicateIdInput = duplicateTicketId.trim();
+
+  if (duplicateIdInput.length < 8) {
     throw createServiceError(
-      "A ticket cannot be merged into itself",
+      "Enter at least 8 characters of the duplicate ticket ID",
       400
     );
   }
 
   return prisma.$transaction(async (tx) => {
     const originalTicket = await tx.ticket.findFirst({
-      where: { id: originalTicketId, organisationId },
+      where: {
+        id: originalTicketId,
+        organisationId,
+      },
     });
 
+    // Resolve short ID or full UUID.
+    const duplicateMatches = await tx.ticket.findMany({
+      where: {
+        organisationId,
+        id: {
+          startsWith: duplicateIdInput,
+        },
+      },
+      select: {
+        id: true,
+      },
+      take: 2,
+    });
+
+    if (duplicateMatches.length === 0) {
+      throw createServiceError("Duplicate ticket not found", 404);
+    }
+
+    if (duplicateMatches.length > 1) {
+      throw createServiceError(
+        "Ambiguous ticket ID. Please enter more characters.",
+        409
+      );
+    }
+
+    const resolvedDuplicateTicketId = duplicateMatches[0].id;
+
+    if (originalTicketId === resolvedDuplicateTicketId) {
+      throw createServiceError(
+        "A ticket cannot be merged into itself",
+        400
+      );
+    }
+
     const duplicateTicket = await tx.ticket.findFirst({
-      where: { id: duplicateTicketId, organisationId },
+      where: {
+        id: resolvedDuplicateTicketId,
+        organisationId,
+      },
     });
 
     if (!originalTicket || !duplicateTicket) {
@@ -797,7 +839,7 @@ export async function mergeTickets(
     // Transfer comments to the original ticket.
     await tx.comment.updateMany({
       where: {
-        ticketId: duplicateTicketId,
+        ticketId: resolvedDuplicateTicketId,
         organisationId,
       },
       data: {
@@ -808,7 +850,7 @@ export async function mergeTickets(
     // Get duplicate ticket watchers.
     const duplicateWatchers = await tx.ticketWatcher.findMany({
       where: {
-        ticketId: duplicateTicketId,
+        ticketId: resolvedDuplicateTicketId,
         organisationId,
       },
     });
@@ -825,19 +867,19 @@ export async function mergeTickets(
       });
     }
 
-    // Remove watchers from the duplicate ticket.
+    // Remove watchers from duplicate ticket.
     await tx.ticketWatcher.deleteMany({
       where: {
-        ticketId: duplicateTicketId,
+        ticketId: resolvedDuplicateTicketId,
         organisationId,
       },
     });
 
-    // Close and link the duplicate ticket.
+    // Close and link duplicate ticket.
     const mergedDuplicate = await tx.ticket.update({
       where: {
         id_organisationId: {
-          id: duplicateTicketId,
+          id: resolvedDuplicateTicketId,
           organisationId,
         },
       },
@@ -855,9 +897,9 @@ export async function mergeTickets(
         ticketId: originalTicketId,
         actorId: actor.id,
         eventType: "TICKET_MERGED",
-        description: `Duplicate ticket ${duplicateTicketId} merged into this ticket by ${actor.name}`,
+        description: `Duplicate ticket ${resolvedDuplicateTicketId} merged into this ticket by ${actor.name}`,
         metadata: {
-          duplicateTicketId,
+          duplicateTicketId: resolvedDuplicateTicketId,
         },
       },
     });
@@ -866,7 +908,7 @@ export async function mergeTickets(
     await tx.ticketEvent.create({
       data: {
         organisationId,
-        ticketId: duplicateTicketId,
+        ticketId: resolvedDuplicateTicketId,
         actorId: actor.id,
         eventType: "TICKET_MERGED_INTO",
         previousStatus: duplicateTicket.status,
