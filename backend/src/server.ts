@@ -1,4 +1,6 @@
+
 import app from "./app";
+import "./workers/thumbnail.worker";
 
 const PORT = process.env.PORT || 5000;
 

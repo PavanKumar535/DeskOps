@@ -9,6 +9,7 @@ import { sendSuccess } from "../utils/apiResponse";
 
 import { getOrganisation } from "../controllers/organisation.controller";
 import * as ticketController from "../controllers/ticket.controller";
+import * as attachmentController from "../controllers/attachment.controller";
 
 import {
   createTicketSchema,
@@ -64,6 +65,24 @@ router.get("/technicians", async (req, res, next) => {
     next(err);
   }
 });
+
+// Ticket attachment upload URL
+router.post(
+  "/tickets/:id/attachments/upload-url",
+  attachmentController.createUploadUrlController
+);
+
+// Complete attachment upload
+router.post(
+  "/tickets/:id/attachments/complete",
+  attachmentController.completeUploadController
+);
+
+// Secure attachment download and preview URL
+router.get(
+  "/tickets/:id/attachments/:attachmentId/download-url",
+  attachmentController.getAttachmentDownloadUrlController
+);
 
 // Ticket creation
 router.post(

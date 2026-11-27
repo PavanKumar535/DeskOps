@@ -3,6 +3,7 @@ import type { User, Ticket, TicketEvent } from "../../api";
 import { apiRequest } from "../../api";
 import { TicketTimeline } from "./TicketTimeline";
 import { AssignModal } from "./AssignModal";
+import { TicketAttachments } from "./TicketAttachments";
 
 interface TicketDetailProps {
   ticketId: string;
@@ -601,6 +602,16 @@ export const TicketDetail: React.FC<TicketDetailProps> = ({
             </button>
           )}
         </div>
+      </div>
+
+      {/* Ticket Attachments */}
+      <div className="card">
+        <TicketAttachments
+          ticketId={ticketId}
+          token={token}
+          attachments={ticket.attachments || []}
+          onUploaded={handleRefresh}
+        />
       </div>
 
       {/* Ticket Audit Timeline */}

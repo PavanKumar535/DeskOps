@@ -197,6 +197,7 @@ export async function getTickets(
 /**
  * Gets one ticket with its event history.
  */
+
 export async function getTicketById(
   ticketId: string,
   organisationId: string,
@@ -224,6 +225,21 @@ export async function getTicketById(
         include: {
           actor: {
             select: { id: true, name: true, email: true, role: true },
+          },
+        },
+      },
+      attachments: {
+        where: { organisationId },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          fileName: true,
+          contentType: true,
+          fileSize: true,
+          status: true,
+          createdAt: true,
+          uploadedBy: {
+            select: { id: true, name: true },
           },
         },
       },

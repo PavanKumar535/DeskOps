@@ -1,7 +1,10 @@
+
 const rawBase = import.meta.env.VITE_API_URL || "http://localhost:5001";
-const API_BASE = rawBase.startsWith("http://") || rawBase.startsWith("https://")
-  ? rawBase.replace(/\/$/, "")
-  : `https://${rawBase.replace(/\/$/, "")}`;
+
+const API_BASE =
+  rawBase.startsWith("http://") || rawBase.startsWith("https://")
+    ? rawBase.replace(/\/$/, "")
+    : `https://${rawBase.replace(/\/$/, "")}`;
 
 export interface User {
   id: string;
@@ -29,6 +32,19 @@ export interface TicketEvent {
     email: string;
     role: string;
   } | null;
+}
+
+export interface Attachment {
+  id: string;
+  fileName: string;
+  contentType: string;
+  fileSize: number;
+  status: "PENDING" | "UPLOADED" | "PROCESSING" | "READY" | "FAILED";
+  createdAt: string;
+  uploadedBy?: {
+    id: string;
+    name: string;
+  };
 }
 
 export interface Unit {
@@ -66,6 +82,7 @@ export interface Ticket {
   closedAt?: string | null;
   reopenUntil?: string | null;
   events?: TicketEvent[];
+  attachments?: Attachment[];
   createdAt: string;
   updatedAt?: string;
 }
@@ -91,7 +108,7 @@ export async function checkHealth(): Promise<HealthStatus> {
       db: dbRes.ok && dbData.status === "success",
       message: healthData.message || "Connected",
     };
-  } catch (err: any) {
+  } catch {
     return {
       api: false,
       db: false,
